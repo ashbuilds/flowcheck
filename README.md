@@ -1,133 +1,197 @@
 # Flowcheck
 
-AI-assisted browser flow runner built on Stagehand.
+Flowcheck is a lightweight, JSON-driven end-to-end browser testing and data extraction framework built on Stagehand (by Browserbase). Define flows in plain JSON, then run them against a real browser using Stagehand’s AI-powered capabilities. Flowcheck blends deterministic browser actions with AI steps and adds a caching layer to make runs fast and CI-friendly.
 
-What's included:
-- JSON-defined suites, flows, fixtures, hooks
-- Stagehand-powered steps: observe, act, extract, agent
-- Deterministic helpers: navigate, click, fill, wait, upload, assertions
-- Artifacts: screenshots and HTML on failure
-- New: Stagehand-style caching for observe and extract steps
 
-Caching overview
-- Goal: minimize LLM calls by caching expensive steps while retaining reliability.
-- What is cached:
-  - observe results: the array of actionable Playwright-like actions returned by Stagehand observe (action previews).
-  - extract results: the structured data returned by Stagehand extract.
-- What is not cached:
-  - Deterministic helpers (click/fill/press/hover/etc.) and assertions.
-- Where it stores:
-  - .flowcheck-cache/observe/*.json and .flowcheck-cache/extract/*.json
-  - .flowcheck-cache is already gitignored
+### Features
+- JSON-defined suites, flows, fixtures, and hooks
+- Stagehand-powered AI steps: observe, act, extract, agent
+- Deterministic helpers: navigate, click, fill, press, check/uncheck, hover, focus, upload, waits, assertions
+- Artifacts on failure: screenshots and full HTML
+- Built-in, file-based caching for observe and extract to dramatically reduce LLM calls
 
-Quick start
-- Record cache while developing (default mode):
+### Why Flowcheck
+- Zero boilerplate: express flows in JSON, no TS/JS needed for basic cases
+- Hybrid approach: deterministic Playwright-like actions plus AI where needed
+- CI-ready: strict replay mode uses pre-recorded cache for reliable, fast runs
+
+### Requirements
+- Node.js 18+
+- pnpm (recommended)
+- .env for environment variables your flows use (see .env.example)
+
+### Installation
+- Install dependencies:
+  ```bash
+  pnpm install
+  ```
+- Prepare environment:
+  ```bash
+  cp .env.example .env
+  # edit .env to include required values (e.g., credentials)
+  ```
+
+### Quick Start
+- Run a suite and record cache by default:
+  ```bash
   pnpm start -- --suite flows/create-folder.suite.json
-
-- Replay only (CI/CD):
-  pnpm start -- --suite flows/create-folder.suite.json --cache-mode=replay --cache-strict
-  or
+  ```
+- Replay strictly in CI (fails on cache miss):
+  ```bash
   pnpm replay -- --suite flows/create-folder.suite.json
-
-- Hybrid (prefer cache, fall back to live and write cache):
+  ```
+- Hybrid mode (prefer cache, write cache on miss):
+  ```bash
   pnpm start -- --suite flows/create-folder.suite.json --cache-mode=hybrid
+  ```
 
-CLI flags
+#### Commands (scripts and common invocations)
+- pnpm build
+  - Type-check and compile TypeScript
+  - Example:
+    ```bash
+    pnpm build
+    ```
+- pnpm start
+  - Run the test runner. Default mode is record (build cache as you go)
+  - Example:
+    ```bash
+    pnpm start -- --suite flows/create-folder.suite.json
+    ```
+- pnpm replay
+  - Convenience script for strict replay mode (use cache only, fail on miss)
+  - Example:
+    ```bash
+    pnpm replay -- --suite flows/create-folder.suite.json
+    ```
+  - Equivalent to:
+    ```bash
+    pnpm start -- --suite flows/create-folder.suite.json --cache-mode=replay --cache-strict
+    ```
+- pnpm cache:info
+  - Print cache statistics (entries, directory, mode)
+  - Example:
+    ```bash
+    pnpm cache:info
+    ```
+- pnpm cache:clear
+  - Clear cache directory and show info
+  - Example:
+    ```bash
+    pnpm cache:clear
+    ```
+- Optional direct invocation (equivalent to pnpm start)
+  - Use tsx directly if preferred:
+    ```bash
+    pnpm tsx index.ts -- --suite flows/create-folder.suite.json [flags...]
+    ```
+
+#### CLI Flags
+- --suite=PATH
+  - Path to suite JSON (default: flows/create-folder.suite.json)
 - --cache-mode=record|replay|hybrid
-  - record: always run live and write cache
-  - replay: use cache only; if --cache-strict and missing, fail
+  - record: always run live and write cache (default when not specified)
+  - replay: use cache only; with --cache-strict, fail on cache miss
   - hybrid: try cache; if missing, run live and write cache
 - --cache-dir=PATH
-  - default .flowcheck-cache
+  - Cache directory (default: .flowcheck-cache)
 - --cache-ttl=MS
-  - time-to-live; expired cache is ignored
+  - TTL in milliseconds; expired cache entries are ignored
 - --cache-strict
-  - in replay mode, fail on cache miss
+  - In replay mode, fail on cache miss (non-strict replay will fall back to live once)
 - --cache-verbose
-  - logs cache hits/misses/reads/writes
+  - Verbose cache logs (hits, misses, read/write)
 - --cache-clear
-  - clears cache directory before the run
+  - Clear the cache directory before the run
 - --cache-info
-  - prints cache stats
+  - Print cache statistics (entries, directory, mode)
 
-Convenience scripts
-- Record (default when no cache flags provided):
-  pnpm start -- --suite flows/create-folder.suite.json
-- Replay strict:
-  pnpm replay -- --suite flows/create-folder.suite.json
-- Cache maintenance:
-  pnpm cache:info
-  pnpm cache:clear
+#### Caching (Record / Replay / Hybrid)
+- Goal: minimize LLM calls while preserving reliability.
+- What is cached:
+  - observe: the array of action previews returned by Stagehand’s observe (Playwright-like actions)
+  - extract: structured data returned by Stagehand’s extract
+- Not cached:
+  - Deterministic helpers (click/fill/press/hover/etc.) and assertions
+- Storage:
+  - .flowcheck-cache/observe/*.json and .flowcheck-cache/extract/*.json
+  - .flowcheck-cache is gitignored
 
-How it works
-- Keying: Cache keys incorporate step instruction, stable options, current URL, suite/flow identity, and viewport.
-- observe step flow:
-  - replay/hybrid: lookup key -> if found, reuse results (zero extra LLM). If strict replay and miss -> error.
-  - record/hybrid miss: call page.observe(), persist result, proceed.
-  - actOnPick uses the cached or fresh result directly with page.act().
-- extract step flow:
-  - replay/hybrid: lookup -> if found, reuse data. If strict replay and miss -> error.
-  - record/hybrid miss: call page.extract(), persist data, proceed.
+### How It Works
+- Keying strategy includes:
+  - instruction, stable options (returnAction, iframes, domSettleTimeoutMs, modelName)
+  - current page URL
+  - suite and flow names
+  - viewport
+- observe step:
+  - replay/hybrid: cache lookup, reuse if found (no extra LLM). In strict replay, cache miss = error
+  - record/hybrid miss: call page.observe(), persist result, continue
+  - actOnPick executes the cached or fresh action with page.act()
+- extract step:
+  - replay/hybrid: cache lookup, reuse if found; in strict replay, miss = error
+  - record/hybrid miss: call page.extract(), persist data, continue
 - Non-strict replay fallback:
-  - If replay is not strict and a miss occurs, we automatically run live once.
+  - If replay is not strict and a miss occurs, Flowcheck falls back to a live call once
 
-Suite-level configuration (optional)
-You can set defaults inside your suite JSON under suite.config.cache. CLI flags override these.
+### CI/CD Usage
+- Step 1: Record cache (in a warm-up job or locally)
+  ```bash
+  pnpm start -- --suite flows/create-folder.suite.json --cache-mode=record --cache-verbose
+  ```
+  Persist .flowcheck-cache as a pipeline artifact or in a shared cache layer.
+- Step 2: Replay strictly in CI
+  ```bash
+  pnpm replay -- --suite flows/create-folder.suite.json
+  ```
+  Benefits: faster, deterministic runs that avoid repeated LLM calls.
 
-Example:
+### Outputs (Artifacts and Cache)
+- Artifacts on failures:
+  - Screenshots and HTML snapshots in artifacts/YYYYMMDD-HHMMSS/...
+- Cache:
+  - AI step results in .flowcheck-cache (gitignored)
+- Exit codes:
+  - Non-zero if any flow fails (suitable for CI gating)
+
+### Configuration (suite JSON)
+- Configure suite defaults under suite.config. Example (including cache):
+```json
 {
   "suite": {
     "name": "My Suite",
     "config": {
+      "baseUrl": "https://example.com",
+      "viewport": { "width": 1280, "height": 720 },
+      "timeouts": { "step": 30000, "navigation": 45000 },
+      "retries": { "step": 1, "flow": 0, "backoffMs": 1500 },
+      "screenshotOnFailure": true,
+      "htmlOnFailure": true,
+      "model": { "modelName": "gpt-4o-mini", "verbose": 1 },
       "cache": {
         "enabled": true,
-        "mode": "record",             // "record" | "replay" | "hybrid"
+        "mode": "record",
         "dir": ".flowcheck-cache",
-        "ttlMs": 86400000,            // 1 day
+        "ttlMs": 86400000,
         "strict": false,
         "verbose": false
       }
     },
-    "flows": [...]
+    "variables": {},
+    "fixtures": { "login": { "name": "Login", "steps": [ /* ... */ ] } },
+    "flows": [ { "name": "My Flow", "steps": [ /* ... */ ] } ]
   }
 }
+```
 
-CI/CD usage
-- Step 1: Record cache locally or in a warm-up job. Example:
-  pnpm start -- --suite flows/create-folder.suite.json --cache-mode=record --cache-verbose
-  Persist .flowcheck-cache as a build artifact or in a shared cache layer.
+### Writing Flows (step types)
+- Control: navigate, wait, waitFor, waitForNavigation, setVar, if, loop, include
+- Stagehand AI: observe, act, extract, agent
+- Deterministic: fill, click, press, check/uncheck, hover, focus, upload
+- Assertions: expect text/visible/enabled/url/title/var/extract/count/custom
+  - See `src/types.ts` for detailed types
 
-- Step 2: Replay cache in CI. Example:
-  pnpm start -- --suite flows/create-folder.suite.json --cache-mode=replay --cache-strict
-  This keeps runs fast and deterministic, avoiding repeated LLM calls.
-
-Notes and best practices
-- Cache invalidation:
-  - Change in step instruction, modelName, returnAction/iframes/domSettleTimeoutMs, URL, suite/flow name, or viewport will create a different key and thus not reuse stale cache.
-  - Use --cache-ttl to limit reuse of old caches.
-- Strict replay is ideal for CI to detect unexpected page changes or missing cache.
-- Hybrid mode is convenient while iterating locally to build cache incrementally.
-
-Development
-- Build:
-  pnpm build
-- Run with default recording:
-  pnpm start -- --suite flows/create-folder.suite.json
-- Replay:
-  pnpm replay -- --suite flows/create-folder.suite.json
-- Show cache info:
-  pnpm cache:info
-- Clear cache:
-  pnpm cache:clear
-
-Implementation details
-- Code:
-  - src/utils/cache.ts: file-based CacheManager and key builders
-  - src/runner.ts: caching integrated for observe and extract steps
-  - index.ts: CLI flags parsed and CacheManager initialized, passed into runner
-  - src/types.ts: SuiteConfig.cache and RunContext.cache fields
-- Artifacts on failure:
-  - artifacts/YYYYMMDD-HHMMSS/... with screenshots and HTML page dumps
-
-License
-See LICENSE file.
+### Notes and Best Practices
+- Keep observe instructions concise and specific to promote stable caching
+- Prefer strict replay in CI to detect unexpected page changes or missing cache
+- Use hybrid mode locally to build cache incrementally as you iterate
+- Ensure required environment variables are set in .env
