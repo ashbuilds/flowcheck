@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { runSuiteWithStagehand } from "./src/runner.js";
 import type { Suite } from "./src/types.js";
+import { CacheManager, type CacheMode } from "./src/utils/cache.js";
 
 function getArg(name: string): string | undefined {
   for (let i = 2; i < process.argv.length; i++) {
@@ -13,6 +14,10 @@ function getArg(name: string): string | undefined {
     if (arg === `--${name}` && i + 1 < process.argv.length) return process.argv[i + 1];
   }
   return undefined;
+}
+
+function hasFlag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
 }
 
 async function main() {
@@ -26,6 +31,52 @@ async function main() {
 
   const suite: Suite = JSON.parse(fs.readFileSync(suitePath, "utf-8"));
   const cfg = suite.suite.config ?? {};
+
+  // Initialize cache manager (defaults to recording on normal runs)
+  const cacheModeArg = (getArg("cache-mode") as CacheMode | undefined);
+  const cacheDirArg = getArg("cache-dir");
+  const cacheTtlArg = getArg("cache-ttl");
+  const cacheStrictFlag = hasFlag("cache-strict");
+  const cacheVerboseFlag = hasFlag("cache-verbose");
+  const cacheClearFlag = hasFlag("cache-clear");
+  const cacheInfoFlag = hasFlag("cache-info");
+
+  const enableViaCli =
+    !!cacheModeArg ||
+    !!cacheDirArg ||
+    !!cacheTtlArg ||
+    cacheStrictFlag ||
+    cacheVerboseFlag ||
+    cacheClearFlag ||
+    cacheInfoFlag;
+
+  const cacheEnabled = (cfg.cache?.enabled ?? true) || enableViaCli;
+
+  let cache: CacheManager | undefined;
+  if (cacheEnabled) {
+    const cacheMode: CacheMode = cacheModeArg ?? (cfg.cache?.mode as CacheMode) ?? "record";
+    const cacheDir = cacheDirArg ?? cfg.cache?.dir ?? ".flowcheck-cache";
+    const cacheTtlMs = cacheTtlArg ? Number(cacheTtlArg) : cfg.cache?.ttlMs;
+    const cacheStrict = cacheStrictFlag || (cfg.cache?.strict ?? false);
+    const cacheVerbose = cacheVerboseFlag || (cfg.cache?.verbose ?? false);
+
+    cache = new CacheManager({
+      dir: cacheDir,
+      mode: cacheMode,
+      ttlMs: cacheTtlMs,
+      strict: cacheStrict,
+      verbose: cacheVerbose,
+    });
+
+    if (cacheClearFlag) {
+      console.log("[cache] clearing cache directory:", cacheDir);
+      cache.clear();
+    }
+    if (cacheInfoFlag) {
+      const info = cache.info();
+      console.log("[cache] info:", info);
+    }
+  }
 
   const stagehand = new Stagehand({
     env: cfg.env ?? "LOCAL",
@@ -56,7 +107,7 @@ async function main() {
     console.log(`Watch live: https://browserbase.com/sessions/${(stagehand as any).browserbaseSessionID}`);
   }
 
-  const result = await runSuiteWithStagehand(stagehand, suite);
+  const result = await runSuiteWithStagehand(stagehand, suite, { cache });
 
   await stagehand.close();
 

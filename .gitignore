@@ -4,3 +4,4 @@
 /flows
 .env
 /chrome
+/.flowcheck-cache

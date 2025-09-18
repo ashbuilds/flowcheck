@@ -3,7 +3,10 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "tsx index.ts"
+    "start": "tsx index.ts",
+    "replay": "tsx index.ts --cache-mode=replay --cache-strict",
+    "cache:clear": "tsx index.ts --cache-clear --cache-info",
+    "cache:info": "tsx index.ts --cache-info"
   },
   "dependencies": {
     "@ai-sdk/azure": "^1.3.22",

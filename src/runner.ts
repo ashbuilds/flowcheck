@@ -11,6 +11,7 @@ import {
 import { trySetInputFiles, ensureFilesExist, resolveFiles } from "./utils/upload.js";
 import { ConsoleReporter } from "./reporter/console.js";
 import { runAssertion } from "./assertions.js";
+import { CacheManager, buildObserveKey, buildExtractKey } from "./utils/cache.js";
 import type {
   Suite,
   Flow,
@@ -222,7 +223,53 @@ async function handleStep(resolvedStep: Step, ctx: RunContext, suite: Suite, dat
     const obsInput = options
       ? { instruction, ...options }
       : { instruction, returnAction: true };
-    const results = await page.observe(obsInput);
+
+    // Attempt cache lookup/use
+    let usedCache = false;
+    let results: any[] | undefined;
+
+    if (ctx.cache instanceof CacheManager) {
+      const key = buildObserveKey(ctx.cache, {
+        instruction,
+        options,
+        url: page.url(),
+        suite: suite.suite.name,
+        flow: ctx.currentFlowName,
+        viewport: ctx.suiteConfig.viewport,
+      });
+
+      const maybe = (ctx.cache.isHybrid() || ctx.cache.isReplay()) ? ctx.cache.get("observe", key) as any : undefined;
+      if (maybe && Array.isArray(maybe.result)) {
+        results = maybe.result;
+        usedCache = true;
+      } else if (ctx.cache.isReplay() && ctx.cache.isStrict()) {
+        throw new Error(`Cache miss for observe key=${key} in replay+strict mode`);
+      }
+
+      if (!usedCache && (ctx.cache.isRecord() || ctx.cache.isHybrid())) {
+        // run inference then persist
+        const fresh = (await page.observe(obsInput)) as any[];
+        results = fresh;
+        try {
+          ctx.cache.set("observe", key, {
+            url: page.url(),
+            result: fresh,
+            meta: { suite: suite.suite.name, flow: ctx.currentFlowName, stepIndex: stepIndexCounter.current },
+          });
+        } catch {
+          // ignore cache write errors
+        }
+      }
+    } else {
+      // no cache configured
+      results = await page.observe(obsInput);
+    }
+
+    if (!results) {
+      // replay non-strict fallback to live inference
+      results = await page.observe(obsInput);
+    }
+
     ctx.variables._lastObserve = results;
     if (id) ctx.variables[id] = results;
 
@@ -236,6 +283,7 @@ async function handleStep(resolvedStep: Step, ctx: RunContext, suite: Suite, dat
         if (found >= 0) idx = found;
       }
       if (!results || results.length === 0) throw new Error("observe returned no results to act on");
+      // Act on the cached or freshly inferred action (no extra LLM call when using cached)
       await page.act(results[idx]);
     }
 
@@ -261,11 +309,63 @@ async function handleStep(resolvedStep: Step, ctx: RunContext, suite: Suite, dat
   if ("extract" in resolvedStep) {
     const { id, instruction, schema, options, validate } = resolvedStep.extract;
     const zodSchema = buildZodFromExtractSchema(schema);
-    const data = await page.extract({
-      instruction,
-      schema: zodSchema,
-      ...(options ?? {}),
-    });
+
+    let data: any;
+    let usedCache = false;
+
+    if (ctx.cache instanceof CacheManager) {
+      const key = buildExtractKey(ctx.cache, {
+        instruction,
+        schema,
+        options,
+        url: page.url(),
+        suite: suite.suite.name,
+        flow: ctx.currentFlowName,
+        viewport: ctx.suiteConfig.viewport,
+      });
+
+      const maybe = (ctx.cache.isHybrid() || ctx.cache.isReplay()) ? ctx.cache.get("extract", key) as any : undefined;
+      if (maybe && typeof maybe.data !== "undefined") {
+        data = maybe.data;
+        usedCache = true;
+      } else if (ctx.cache.isReplay() && ctx.cache.isStrict()) {
+        throw new Error(`Cache miss for extract key=${key} in replay+strict mode`);
+      }
+
+      if (!usedCache && (ctx.cache.isRecord() || ctx.cache.isHybrid())) {
+        data = await page.extract({
+          instruction,
+          schema: zodSchema,
+          ...(options ?? {}),
+        });
+        try {
+          ctx.cache.set("extract", key, {
+            url: page.url(),
+            data,
+            meta: { suite: suite.suite.name, flow: ctx.currentFlowName, stepIndex: stepIndexCounter.current },
+          });
+        } catch {
+          // ignore cache write errors
+        }
+      }
+    } else {
+      // no cache configured
+      data = await page.extract({
+        instruction,
+        schema: zodSchema,
+        ...(options ?? {}),
+      });
+    }
+
+    if (typeof data === "undefined") {
+      // replay non-strict fallback to live inference
+      data = await page.extract({
+        instruction,
+        schema: zodSchema,
+        ...(options ?? {}),
+      });
+    }
+
     ctx.variables._lastExtract = data;
     if (id) ctx.variables[id] = data;
     if (validate && validate.length) {
@@ -431,7 +531,7 @@ async function runFlow(flow: Flow, ctx: RunContext, suite: Suite): Promise<{ pas
  * Run the whole suite using an existing Stagehand instance.
  * Index.ts should initialize Stagehand with desired env and browser options.
  */
-export async function runSuiteWithStagehand(stagehand: any, suite: Suite): Promise<{ passed: boolean }> {
+export async function runSuiteWithStagehand(stagehand: any, suite: Suite, options?: { cache?: CacheManager }): Promise<{ passed: boolean }> {
   const page = stagehand.page;
   const context = stagehand.context;
 
@@ -456,6 +556,7 @@ export async function runSuiteWithStagehand(stagehand: any, suite: Suite): Promi
     suiteConfig: cfg,
     reporter,
     artifactsDir,
+    cache: options?.cache,
   };
 
   reporter.onSuiteStart(suite.suite.name);

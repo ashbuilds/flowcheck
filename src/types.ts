@@ -21,6 +21,15 @@ export type SuiteConfig = {
     domSettleTimeoutMs?: number;
     verbose?: 0 | 1 | 2;
   };
+  cache?: {
+    enabled?: boolean;
+    mode?: "record" | "replay" | "hybrid";
+    dir?: string;
+    ttlMs?: number;
+    strict?: boolean;
+    verbose?: boolean;
+    selfHeal?: boolean;
+  };
 };
 
 /**
@@ -301,6 +310,7 @@ export type RunContext = {
   suiteConfig: SuiteConfig;
   reporter: Reporter;
   artifactsDir: string;
+  cache?: any;
   currentFlowName?: string;
 };
 
