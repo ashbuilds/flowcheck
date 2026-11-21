@@ -3,6 +3,12 @@
 Flowcheck is a lightweight, JSON-driven end-to-end browser testing and data extraction framework built on Stagehand (by Browserbase). Define flows in plain JSON, then run them against a real browser using Stagehand’s AI-powered capabilities. Flowcheck blends deterministic browser actions with AI steps and adds a caching layer to make runs fast and CI-friendly.
 
 
+### Engineering overview
+
+The runner reads a JSON suite, resolves its variables and fixtures, and executes deterministic browser actions or Stagehand AI steps. Assertions determine the result, while failure screenshots and HTML provide debugging evidence.
+
+The cache stores AI observations and extractions. Deterministic actions and assertions still execute during replay, and strict replay fails on a cache miss. This separates repeatable execution from the parts that require a fresh model call.
+
 ### Features
 - JSON-defined suites, flows, fixtures, and hooks
 - Stagehand-powered AI steps: observe, act, extract, agent
